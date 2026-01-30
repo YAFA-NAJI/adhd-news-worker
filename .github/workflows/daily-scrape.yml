@@ -15,7 +15,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: '20' # تم التحديث إلى إصدار 20 لحل المشكلة
 
       - name: Install Dependencies
         run: npm install
@@ -23,6 +23,5 @@ jobs:
       - name: Run Scraper
         run: node index.js
         env:
-          # تأكدي أن هذه الأسماء تطابق ما هو موجود في index.js
           NEXT_PUBLIC_SUPABASE_NEW_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_NEW_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
