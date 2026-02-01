@@ -1,6 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { translate } = require('@vitalets/google-translate-api');
 require('dotenv').config();
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_NEW_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -9,135 +10,135 @@ const KEYWORDS = ['adhd', 'تشتت', 'انتباه', 'فرط', 'حركة', 'ا�
 
 const sources = [
     { name: "Altibbi", url: "https://altibbi.com/مقالات-طبية/الصحة-النفسية", selector: "article", lang: "ar" },
-    // تحديث رابط ويب طب لقسم أكثر استقراراً
     { name: "WebTeb", url: "https://www.webteb.com/mental-health", selector: ".card, .article-card", lang: "ar" },
     { name: "Medical News Today", url: "https://www.medicalnewstoday.com/categories/adhd", selector: "li.css-0, article", lang: "en" },
     { name: "Verywell Mind", url: "https://www.verywellmind.com/adhd-4157274", selector: ".mntl-card-list-items", lang: "en" },
     { name: "Psychology Today", url: "https://www.psychologytoday.com/intl/basics/adhd", selector: ".blog_post_card, .teaser-card", lang: "en" }
 ];
 
-async function fetchFullContent(url, sourceName) {
+async function smartTranslate(text, fromLang, toLang) {
+    if (!text || text.trim() === "") return null;
     try {
-        const response = await axios.get(url, { 
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36' },
-            timeout: 15000 // زيادة الوقت قليلاً للمقالات الطويلة
-        });
-        const $ = cheerio.load(response.data);
-        let paragraphs = [];
-
-        // 1. تحديد الحاويات الحقيقية للمحتوى في المواقع العربية والأجنبية
-        // أضفت selectors محددة لـ (الطبي، ويب طب، verywellmind، psychology today)
-        let contentSelectors = [
-            '.article-content p',              // الطبي
-            '.article-body p',                 // ويب طب
-            '.mntl-sc-block-group--text p',    // Verywell Mind
-            '.entry-content p',                // Psychology Today
-            '.css-1v96o8 p',                   // Medical News Today
-            'article p',                       // عام
-            '.text-content p'                  // عام
-        ];
-
-        let combinedSelector = contentSelectors.join(', ');
-
-        $(combinedSelector).each((i, el) => {
-            const txt = $(el).text().trim();
-            
-            // 2. تصفية النصوص غير المفيدة (إعلانات، روابط عشوائية، حقوق)
-            const isInvalid = 
-                txt.length < 40 || 
-                txt.includes('إشترك') || 
-                txt.includes('اقرأ أكثر') || 
-                txt.includes('حقوق النشر') ||
-                txt.toLowerCase().includes('copyright') ||
-                txt.toLowerCase().includes('subscribe');
-
-            if (!isInvalid) {
-                paragraphs.push(txt);
-            }
-        });
-
-        // 3. التحقق: إذا جمعنا أقل من 3 فقرات، فالمقالة غالباً لم تسحب بشكل كامل
-        if (paragraphs.length < 3) {
-            // محاولة أخيرة لسحب أي نص داخل div كبير إذا فشل الـ p
-            $('.article-body, .article-content').find('div').each((i, el) => {
-                const divTxt = $(el).text().trim();
-                if (divTxt.length > 200) paragraphs.push(divTxt);
-            });
-        }
-
-        // تحويل المصفوفة لنص واحد بفاصل أسطر
-        return paragraphs.length >= 2 ? paragraphs.join('\n\n') : null;
-    } catch (e) { 
-        console.log(`⚠️ Failed to fetch content from: ${url}`);
-        return null; 
+        const res = await translate(text, { from: fromLang, to: toLang });
+        return res && res.text ? res.text : null;
+    } catch (err) {
+        console.error(`⚠️ Translation Error (${fromLang} -> ${toLang}):`, err.message);
+        return null;
     }
 }
 
+async function fetchFullContent(url) {
+    try {
+        const response = await axios.get(url, { 
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            timeout: 15000 
+        });
+        const $ = cheerio.load(response.data);
+        let paragraphs = [];
+        let contentSelectors = ['.article-content p', '.article-body p', '.mntl-sc-block-group--text p', '.entry-content p', '.css-1v96o8 p', 'article p'];
+        
+        $(contentSelectors.join(', ')).each((i, el) => {
+            const txt = $(el).text().trim();
+            if (txt.length > 50 && !txt.includes('اقرأ أكثر') && !txt.includes('إشترك')) {
+                paragraphs.push(txt);
+            }
+        });
+        return paragraphs.length >= 1 ? paragraphs.join('\n\n') : null;
+    } catch (e) { return null; }
+}
+
+// دالة ذكية لاستخراج صورة الغلاف الحقيقية
+async function fetchMainImage($, articleEl, sourceUrl) {
+    let imageUrl = null;
+    
+    // 1. محاولة إيجاد الصورة في العنصر نفسه (القائمة)
+    const imgCandidates = articleEl.find('img');
+    imgCandidates.each((i, el) => {
+        const src = $(el).attr('data-src') || $(el).attr('srcset')?.split(' ')[0] || $(el).attr('src');
+        if (src && src.length > 10 && !src.includes('clock') && !src.includes('time') && !src.includes('avatar') && !src.includes('logo')) {
+            imageUrl = src;
+            return false; // كسر الحلقة عند العثور على أول صورة مناسبة
+        }
+    });
+
+    // 2. إذا لم يجد في القائمة، يأخذ صورة الـ OG Meta من الرابط الأصلي للمقال (أدق صورة غلاف)
+    if (!imageUrl || imageUrl.includes('data:image')) {
+        try {
+            const res = await axios.get(sourceUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 5000 });
+            const $page = cheerio.load(res.data);
+            imageUrl = $page('meta[property="og:image"]').attr('content') || 
+                       $page('meta[name="twitter:image"]').attr('content');
+        } catch (e) {}
+    }
+
+    // 3. تصحيح المسار إذا كان نسبياً
+    if (imageUrl && !imageUrl.startsWith('http')) {
+        const origin = new URL(sourceUrl).origin;
+        imageUrl = origin + (imageUrl.startsWith('/') ? '' : '/') + imageUrl;
+    }
+
+    // 4. خيار احتياطي احترافي (Unsplash) بدلاً من صورة الساعة
+    if (!imageUrl) {
+        imageUrl = `https://images.unsplash.com/photo-1551836022-d5d88e9218df?q=80&w=1200&auto=format&fit=crop`;
+    }
+
+    return imageUrl;
+}
+
 async function masterScraper() {
-    console.log("🚀 Starting Smart ADHD Content Engine...");
+    console.log("🚀 Starting Smart Scraper with Real Cover Images...");
     
     for (const source of sources) {
         try {
-            const response = await axios.get(source.url, { 
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36' } 
-            });
+            console.log(`\n🔎 Source: ${source.name}`);
+            const response = await axios.get(source.url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             const $ = cheerio.load(response.data);
             const items = $(source.selector).slice(0, 10); 
 
             for (let i = 0; i < items.length; i++) {
                 const el = $(items[i]);
                 const title = el.find('h2, h3, .card__title, .mntl-card-list-items__title').first().text().trim();
-                
                 if (!title || !KEYWORDS.some(key => title.toLowerCase().includes(key))) continue;
 
-                // --- الحل لمشكلة startsWith (تأمين الرابط) ---
-                let link = el.find('a').attr('href');
-                if (!link) {
-                    // محاولة أخرى إذا كان العنصر نفسه هو الرابط
-                    link = el.attr('href');
-                }
-                
-                if (!link) continue; // تخطي إذا لم نجد رابطاً نهائياً
-
+                let link = el.find('a').attr('href') || el.attr('href');
+                if (!link) continue;
                 const fullLink = link.startsWith('http') ? link : (new URL(source.url).origin + link);
 
-                const content = await fetchFullContent(fullLink, source.name);
+                const content = await fetchFullContent(fullLink);
                 if (!content) continue;
 
-                // منطق الصور الذكي
-                let imageUrl = null;
-                const imgElement = el.find('img').first();
-                let rawSrc = imgElement.attr('data-src') || imgElement.attr('srcset')?.split(' ')[0] || imgElement.attr('src');
-
-                if (!rawSrc || rawSrc.includes('clock') || rawSrc.includes('time') || rawSrc.length < 10) {
-                    let searchTag = 'mental-health';
-                    if (title.toLowerCase().includes('child') || title.includes('طفل')) searchTag = 'child';
-                    imageUrl = `https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=1200&q=80&sig=${encodeURIComponent(title.substring(0,10))}&${searchTag}`;
-                } else {
-                    imageUrl = rawSrc.startsWith('http') ? rawSrc : (new URL(source.url).origin + rawSrc);
-                }
+                // استخراج صورة الغلاف الحقيقية
+                const imageUrl = await fetchMainImage($, el, fullLink);
 
                 const payload = {
                     source_name: source.name,
                     source_url: fullLink,
-                    image_url: imageUrl, 
+                    image_url: imageUrl,
                     slug: title.toLowerCase().replace(/[^\w ]+/g, '').replace(/ +/g, '-').substring(0, 60) + "-" + Date.now(),
                     is_published: true,
-                    title_en: source.lang === 'en' ? title : null,
-                    title_ar: source.lang === 'ar' ? title : null,
-                    content_en: source.lang === 'en' ? content : null,
-                    content_ar: source.lang === 'ar' ? content : null,
-                    excerpt_en: source.lang === 'en' ? title : null,
-                    excerpt_ar: source.lang === 'ar' ? title : null,
-                    created_at: new Date().toISOString()
                 };
 
-                const { error } = await supabase.from('articles').upsert(payload, { onConflict: 'source_url' });
-                if (!error) console.log(`✅ Saved: "${title.substring(0, 30)}..." from ${source.name}`);
+                // منطق الترجمة المزدوجة
+                if (source.lang === 'ar') {
+                    payload.title_ar = title;
+                    payload.content_ar = content;
+                    payload.excerpt_ar = title.substring(0, 150);
+                    const [tT, tC] = await Promise.all([smartTranslate(title, 'ar', 'en'), smartTranslate(content, 'ar', 'en')]);
+                    payload.title_en = tT; payload.content_en = tC; payload.excerpt_en = tT ? tT.substring(0, 150) : null;
+                } else {
+                    payload.title_en = title;
+                    payload.content_en = content;
+                    payload.excerpt_en = title.substring(0, 150);
+                    const [tT, tC] = await Promise.all([smartTranslate(title, 'en', 'ar'), smartTranslate(content, 'en', 'ar')]);
+                    payload.title_ar = tT; payload.content_ar = tC; payload.excerpt_ar = tT ? tT.substring(0, 150) : null;
+                }
+
+                await supabase.from('articles').upsert(payload, { onConflict: 'source_url' });
+                console.log(`✅ Saved: "${title.substring(0, 30)}..." with real image.`);
             }
-        } catch (e) { console.log(`❌ Error at ${source.name}:`, e.message); }
+        } catch (e) { console.log(`❌ Error: ${e.message}`); }
     }
-    console.log("🏁 Process Finished.");
+    console.log("\n🏁 Done.");
 }
 
-masterScraper().then(() => process.exit(0)).catch((err) => { console.error(err); process.exit(1); });
+masterScraper().then(() => process.exit(0));
