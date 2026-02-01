@@ -20,23 +20,57 @@ async function fetchFullContent(url, sourceName) {
     try {
         const response = await axios.get(url, { 
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36' },
-            timeout: 10000 
+            timeout: 15000 // زيادة الوقت قليلاً للمقالات الطويلة
         });
         const $ = cheerio.load(response.data);
         let paragraphs = [];
 
-        // تحسين اختيار المحتوى للمواقع الأجنبية
-        let contentSelector = '.article-content p, article p, .text-content p, .mntl-sc-block-group--text p, .css-1v96o8 p';
+        // 1. تحديد الحاويات الحقيقية للمحتوى في المواقع العربية والأجنبية
+        // أضفت selectors محددة لـ (الطبي، ويب طب، verywellmind، psychology today)
+        let contentSelectors = [
+            '.article-content p',              // الطبي
+            '.article-body p',                 // ويب طب
+            '.mntl-sc-block-group--text p',    // Verywell Mind
+            '.entry-content p',                // Psychology Today
+            '.css-1v96o8 p',                   // Medical News Today
+            'article p',                       // عام
+            '.text-content p'                  // عام
+        ];
 
-        $(contentSelector).each((i, el) => {
+        let combinedSelector = contentSelectors.join(', ');
+
+        $(combinedSelector).each((i, el) => {
             const txt = $(el).text().trim();
-            if (txt.length > 60 && !txt.includes('إشترك') && !txt.toLowerCase().includes('copyright')) {
+            
+            // 2. تصفية النصوص غير المفيدة (إعلانات، روابط عشوائية، حقوق)
+            const isInvalid = 
+                txt.length < 40 || 
+                txt.includes('إشترك') || 
+                txt.includes('اقرأ أكثر') || 
+                txt.includes('حقوق النشر') ||
+                txt.toLowerCase().includes('copyright') ||
+                txt.toLowerCase().includes('subscribe');
+
+            if (!isInvalid) {
                 paragraphs.push(txt);
             }
         });
 
+        // 3. التحقق: إذا جمعنا أقل من 3 فقرات، فالمقالة غالباً لم تسحب بشكل كامل
+        if (paragraphs.length < 3) {
+            // محاولة أخيرة لسحب أي نص داخل div كبير إذا فشل الـ p
+            $('.article-body, .article-content').find('div').each((i, el) => {
+                const divTxt = $(el).text().trim();
+                if (divTxt.length > 200) paragraphs.push(divTxt);
+            });
+        }
+
+        // تحويل المصفوفة لنص واحد بفاصل أسطر
         return paragraphs.length >= 2 ? paragraphs.join('\n\n') : null;
-    } catch (e) { return null; }
+    } catch (e) { 
+        console.log(`⚠️ Failed to fetch content from: ${url}`);
+        return null; 
+    }
 }
 
 async function masterScraper() {
