@@ -2,8 +2,9 @@ name: Daily ADHD Articles Update
 
 on:
   schedule:
-    - cron: '0 8 * * *'
-  workflow_dispatch: 
+    # الساعة 6:00 الصبح UTC تعادل الساعة 8:00 الصبح بتوقيت القدس (شتاءً)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # هذا الخيار بخليك تشغل السكربت يدوي بأي وقت
 
 jobs:
   scrape:
@@ -15,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '20' # تم التحديث إلى إصدار 20 لحل المشكلة
+          node-version: '20'
 
       - name: Install Dependencies
         run: npm install

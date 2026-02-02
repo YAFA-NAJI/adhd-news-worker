@@ -2,11 +2,18 @@ const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { translate } = require('@vitalets/google-translate-api');
+const { Resend } = require('resend');
 require('dotenv').config();
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_NEW_URL, process.env.SUPABASE_SERVICE_KEY);
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const KEYWORDS = ['adhd', 'تشتت', 'انتباه', 'فرط', 'حركة', 'النمو العصبي', 'psychology', 'autism', 'توحد', 'تأخر', 'العصبية', 'التوتر', 'stress', 'mental', 'anxiety', 'focus'];
+// كلمات مفتاحية دقيقة لضمان جودة المحتوى
+const KEYWORDS = [
+    'adhd', 'تشتت', 'انتباه', 'توحد', 'autism', 'فرط حركة', 
+    'الاندفاعية', 'impulsivity', 'hyperactivity', 'neurodiversity', 
+    'النمو العصبي', 'تأخر النطق', 'صعوبات تعلم','ADHD','autism'
+];
 
 const sources = [
     { name: "Altibbi", url: "https://altibbi.com/مقالات-طبية/الصحة-النفسية", selector: "article", lang: "ar" },
@@ -16,127 +23,128 @@ const sources = [
     { name: "Psychology Today", url: "https://www.psychologytoday.com/intl/basics/adhd", selector: ".blog_post_card, .teaser-card", lang: "en" }
 ];
 
+// دالة للنوم (Sleep) لتجنب حظر الترجمة
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function smartTranslate(text, fromLang, toLang) {
     if (!text || text.trim() === "") return null;
     try {
-        const res = await translate(text, { from: fromLang, to: toLang });
+        // نأخذ أول 3000 حرف فقط لتجنب فشل الترجمة بسبب طول النص
+        const safeText = text.substring(0, 3000);
+        const res = await translate(safeText, { from: fromLang, to: toLang });
         return res && res.text ? res.text : null;
     } catch (err) {
-        console.error(`⚠️ Translation Error (${fromLang} -> ${toLang}):`, err.message);
+        console.error(`      ⚠️ Translation Error: ${err.message}`);
         return null;
+    }
+}
+
+async function notifyUsersViaResend(articleTitle, articleSlug) {
+    try {
+        await resend.emails.send({
+            from: 'Tawazun ADHD <onboarding@resend.dev>',
+            to: ['yafan***@gmail.com'], // استبدله بإيميلك المسجل في Resend
+            subject: `🆕 مقال جديد: ${articleTitle}`,
+            html: `
+                <div dir="rtl" style="font-family: sans-serif; text-align: right; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+                    <h2 style="color: #0070f3;">موضوع جديد يخص توازن!</h2>
+                    <p style="font-size: 16px;">العنوان: <strong>${articleTitle}</strong></p>
+                    <div style="margin-top: 25px;">
+                        <a href="https://tawazun-adhd.vercel.app/ar/blog/${articleSlug}" 
+                           style="background: #0070f3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                           إقرأ المقال الآن
+                        </a>
+                    </div>
+                </div>
+            `
+        });
+        console.log(`   📧 Notification Sent.`);
+    } catch (err) {
+        console.error('   ⚠️ Email not sent.');
     }
 }
 
 async function fetchFullContent(url) {
     try {
-        const response = await axios.get(url, { 
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            timeout: 15000 
-        });
+        const response = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
         const $ = cheerio.load(response.data);
         let paragraphs = [];
-        let contentSelectors = ['.article-content p', '.article-body p', '.mntl-sc-block-group--text p', '.entry-content p', '.css-1v96o8 p', 'article p'];
-        
-        $(contentSelectors.join(', ')).each((i, el) => {
+        $('article p, .article-content p, .article-body p, .mntl-sc-block-group--text p').each((i, el) => {
             const txt = $(el).text().trim();
-            if (txt.length > 50 && !txt.includes('اقرأ أكثر') && !txt.includes('إشترك')) {
-                paragraphs.push(txt);
-            }
+            if (txt.length > 60) paragraphs.push(txt);
         });
-        return paragraphs.length >= 1 ? paragraphs.join('\n\n') : null;
+        return paragraphs.length > 0 ? paragraphs.join('\n\n') : null;
     } catch (e) { return null; }
 }
 
-// دالة ذكية لاستخراج صورة الغلاف الحقيقية
-async function fetchMainImage($, articleEl, sourceUrl) {
-    let imageUrl = null;
-    
-    // 1. محاولة إيجاد الصورة في العنصر نفسه (القائمة)
-    const imgCandidates = articleEl.find('img');
-    imgCandidates.each((i, el) => {
-        const src = $(el).attr('data-src') || $(el).attr('srcset')?.split(' ')[0] || $(el).attr('src');
-        if (src && src.length > 10 && !src.includes('clock') && !src.includes('time') && !src.includes('avatar') && !src.includes('logo')) {
-            imageUrl = src;
-            return false; // كسر الحلقة عند العثور على أول صورة مناسبة
-        }
-    });
-
-    // 2. إذا لم يجد في القائمة، يأخذ صورة الـ OG Meta من الرابط الأصلي للمقال (أدق صورة غلاف)
-    if (!imageUrl || imageUrl.includes('data:image')) {
-        try {
-            const res = await axios.get(sourceUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 5000 });
-            const $page = cheerio.load(res.data);
-            imageUrl = $page('meta[property="og:image"]').attr('content') || 
-                       $page('meta[name="twitter:image"]').attr('content');
-        } catch (e) {}
-    }
-
-    // 3. تصحيح المسار إذا كان نسبياً
-    if (imageUrl && !imageUrl.startsWith('http')) {
-        const origin = new URL(sourceUrl).origin;
-        imageUrl = origin + (imageUrl.startsWith('/') ? '' : '/') + imageUrl;
-    }
-
-    // 4. خيار احتياطي احترافي (Unsplash) بدلاً من صورة الساعة
-    if (!imageUrl) {
-        imageUrl = `https://images.unsplash.com/photo-1551836022-d5d88e9218df?q=80&w=1200&auto=format&fit=crop`;
-    }
-
-    return imageUrl;
-}
-
 async function masterScraper() {
-    console.log("🚀 Starting Smart Scraper with Real Cover Images...");
+    console.log("🚀 Starting Targeted Scraper Session...");
     
     for (const source of sources) {
         try {
-            console.log(`\n🔎 Source: ${source.name}`);
+            console.log(`\n🔎 Checking: ${source.name}...`);
             const response = await axios.get(source.url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             const $ = cheerio.load(response.data);
             const items = $(source.selector).slice(0, 10); 
 
             for (let i = 0; i < items.length; i++) {
                 const el = $(items[i]);
-                const title = el.find('h2, h3, .card__title, .mntl-card-list-items__title').first().text().trim();
+                const title = el.find('h2, h3, .card__title, .mntl-card-list-items__title, a').first().text().trim();
+                
                 if (!title || !KEYWORDS.some(key => title.toLowerCase().includes(key))) continue;
 
                 let link = el.find('a').attr('href') || el.attr('href');
                 if (!link) continue;
                 const fullLink = link.startsWith('http') ? link : (new URL(source.url).origin + link);
 
+                const { data: exists } = await supabase.from('articles').select('id').eq('source_url', fullLink).maybeSingle();
+                if (exists) continue;
+
+                console.log(`   🎯 Found Match: "${title.substring(0, 40)}..."`);
+
                 const content = await fetchFullContent(fullLink);
                 if (!content) continue;
 
-                // استخراج صورة الغلاف الحقيقية
-                const imageUrl = await fetchMainImage($, el, fullLink);
+                const imageUrl = el.find('img').first().attr('src') || `https://images.unsplash.com/photo-1551836022-d5d88e9218df?q=80&w=1200&auto=format&fit=crop`;
+                const articleSlug = title.toLowerCase().replace(/[^\w ]+/g, '').replace(/ +/g, '-').substring(0, 60) + "-" + Date.now();
 
                 const payload = {
-                    source_name: source.name,
-                    source_url: fullLink,
-                    image_url: imageUrl,
-                    slug: title.toLowerCase().replace(/[^\w ]+/g, '').replace(/ +/g, '-').substring(0, 60) + "-" + Date.now(),
-                    is_published: true,
+                    source_name: source.name, source_url: fullLink, image_url: imageUrl,
+                    slug: articleSlug, is_published: true, created_at: new Date().toISOString()
                 };
 
-                // منطق الترجمة المزدوجة
+                // --- عملية الترجمة المحسنة ---
+                console.log(`   ⏳ Translating Title & Content...`);
                 if (source.lang === 'ar') {
                     payload.title_ar = title;
                     payload.content_ar = content;
-                    payload.excerpt_ar = title.substring(0, 150);
-                    const [tT, tC] = await Promise.all([smartTranslate(title, 'ar', 'en'), smartTranslate(content, 'ar', 'en')]);
-                    payload.title_en = tT; payload.content_en = tC; payload.excerpt_en = tT ? tT.substring(0, 150) : null;
+                    payload.title_en = await smartTranslate(title, 'ar', 'en') || title;
+                    await sleep(1000); // انتظار ثانية بين الطلبات لضمان استقرار الترجمة
+                    payload.content_en = await smartTranslate(content, 'ar', 'en') || content;
                 } else {
                     payload.title_en = title;
                     payload.content_en = content;
-                    payload.excerpt_en = title.substring(0, 150);
-                    const [tT, tC] = await Promise.all([smartTranslate(title, 'en', 'ar'), smartTranslate(content, 'en', 'ar')]);
-                    payload.title_ar = tT; payload.content_ar = tC; payload.excerpt_ar = tT ? tT.substring(0, 150) : null;
+                    payload.title_ar = await smartTranslate(title, 'en', 'ar') || title;
+                    await sleep(1000);
+                    payload.content_ar = await smartTranslate(content, 'en', 'ar') || content;
                 }
 
-                await supabase.from('articles').upsert(payload, { onConflict: 'source_url' });
-                console.log(`✅ Saved: "${title.substring(0, 30)}..." with real image.`);
+                const { data: savedArticle, error: articleError } = await supabase
+                    .from('articles').upsert(payload, { onConflict: 'source_url' }).select().single();
+                
+                if (!articleError && savedArticle) {
+                    const { data: existingItem } = await supabase.from('content_items').select('id').eq('external_article_id', savedArticle.id).maybeSingle();
+
+                    if (!existingItem) {
+                        await supabase.from('content_items').insert({
+                            external_article_id: savedArticle.id, content_type: 'external_article', slug: articleSlug, is_published: true, published_at: new Date().toISOString()
+                        });
+                        console.log(`   ✅ Saved & Linked.`);
+                        await notifyUsersViaResend(payload.title_ar || title, articleSlug);
+                    }
+                }
             }
-        } catch (e) { console.log(`❌ Error: ${e.message}`); }
+        } catch (e) { console.error(`❌ Error in ${source.name}: ${e.message}`); }
     }
     console.log("\n🏁 Done.");
 }
