@@ -30,27 +30,43 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function smartTranslate(text, fromLang, toLang) {
     if (!text || text.trim() === "") return null;
-    try {
-        // تحديد طول النص بـ 2000 حرف لتقليل احتمالية الـ Timeout
-        const safeText = text.substring(0, 2000);
-        
-        const res = await translate(safeText, { 
-            from: fromLang, 
-            to: toLang,
-            fetchOptions: { timeout: 15000 } // زيادة مهلة الانتظار لـ 15 ثانية
-        });
-        
-        return res && res.text ? res.text : null;
-    } catch (err) {
-        // في حال حدوث Timeout أو خطأ، نطبع التحذير ونعود بـ null ليتم استخدام النص الأصلي
-        console.warn(`      ⚠️ Translation Timeout/Error, skipping translation for this part.`);
-        return null;
+    
+    // إذا كان النص قصير (مثل العنوان)، نترجمه مباشرة
+    if (text.length < 500) {
+        try {
+            const res = await translate(text, { from: fromLang, to: toLang });
+            return res.text;
+        } catch (e) { return text; }
     }
-}
 
+    // إذا كان النص طويل (المحتوى)، نقسمه إلى أجزاء (كل جزء 1000 حرف)
+    const chunks = text.match(/[\s\S]{1,1000}/g) || [];
+    let translatedFull = "";
+
+    console.log(`   📦 Breaking content into ${chunks.length} parts for translation...`);
+
+    for (const chunk of chunks) {
+        try {
+            const res = await translate(chunk, { from: fromLang, to: toLang });
+            translatedFull += res.text + " ";
+            // انتظار بسيط بين الأجزاء لتجنب الحظر
+            await sleep(500); 
+        } catch (err) {
+            console.warn(`   ⚠️ Part translation failed, using original text for this part.`);
+            translatedFull += chunk + " ";
+        }
+    }
+
+    return translatedFull.trim();
+}
 async function notifyUsersViaResend(articleTitle, articleSlug) {
+    if (!resend) {
+        console.warn("⚠️ Resend API Key is missing.");
+        return;
+    }
     try {
-        await resend.emails.send({
+        // إضافة await هنا ضرورية جداً لضمان اكتمال الطلب
+        const data = await resend.emails.send({
             from: 'Tawazun ADHD <onboarding@resend.dev>',
             to: ['yafanaji2002@gmail.com'], 
             subject: `🆕 مقال جديد: ${articleTitle}`,
@@ -67,12 +83,11 @@ async function notifyUsersViaResend(articleTitle, articleSlug) {
                 </div>
             `
         });
-        console.log(`   📧 Notification Sent.`);
+        console.log(`   📧 Notification Sent: ${data.id || 'Success'}`);
     } catch (err) {
-        console.error('   ⚠️ Email not sent.');
+        console.error('   ⚠️ Email not sent:', err.message);
     }
 }
-
 async function fetchFullContent(url) {
     try {
         const response = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 15000 });
@@ -157,5 +172,6 @@ async function masterScraper() {
     }
     console.log("\n🏁 Done.");
 }
+
 
 masterScraper().then(() => process.exit(0));
