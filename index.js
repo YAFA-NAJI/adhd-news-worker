@@ -6,7 +6,7 @@ const { Resend } = require('resend');
 require('dotenv').config();
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_NEW_URL, process.env.SUPABASE_SERVICE_KEY);
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 // كلمات مفتاحية دقيقة لضمان جودة المحتوى
 const KEYWORDS = [
@@ -52,7 +52,7 @@ async function notifyUsersViaResend(articleTitle, articleSlug) {
     try {
         await resend.emails.send({
             from: 'Tawazun ADHD <onboarding@resend.dev>',
-            to: ['yafan***@gmail.com'], // تأكدي من وضع إيميلك المسجل هنا
+            to: ['yafanaji2002@gmail.com'], 
             subject: `🆕 مقال جديد: ${articleTitle}`,
             html: `
                 <div dir="rtl" style="font-family: sans-serif; text-align: right; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
