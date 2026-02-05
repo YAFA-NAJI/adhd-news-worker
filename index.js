@@ -19,7 +19,8 @@ if (!fs.existsSync(ARTICLES_DIR)) {
 const KEYWORDS = [
     'adhd', 'تشتت', 'انتباه', 'توحد', 'autism', 'فرط حركة', 
     'الاندفاعية', 'impulsivity', 'hyperactivity', 'neurodiversity', 
-    'النمو العصبي', 'تأخر النطق', 'صعوبات تعلم', 'ADHD'
+    'النمو العصبي', 'تأخر النطق', 'صعوبات تعلم', 'ADHD',
+    'neurodivergent', 'executive function', 'add/adhd'
 ];
 
 // المصادر المستهدفة
