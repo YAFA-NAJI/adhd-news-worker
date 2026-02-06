@@ -17,6 +17,7 @@
     "axios": "^1.13.4",
     "cheerio": "^1.2.0",
     "dotenv": "^17.2.3",
+    "google-translate-api-x": "^10.7.2",
     "node-cron": "^4.2.1",
     "nodemailer": "^7.0.13",
     "resend": "^6.9.1"
