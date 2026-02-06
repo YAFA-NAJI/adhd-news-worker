@@ -1,18 +1,17 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { translate } = require('@vitalets/google-translate-api');
-const { Resend } = require('resend');
-const fs = require('fs');
-const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
+
+// إعداد اتصال Supabase
+const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_NEW_URL, 
+    process.env.SUPABASE_SERVICE_KEY        
+);
 
 // إعدادات التحكم
 const MAX_ARTICLES_PER_RUN = 5; 
-const ARTICLES_DIR = path.join(process.cwd(), 'articles');
-
-if (!fs.existsSync(ARTICLES_DIR)) {
-    fs.mkdirSync(ARTICLES_DIR, { recursive: true });
-}
 
 const KEYWORDS = [
     'adhd', 'تشتت', 'انتباه', 'توحد', 'autism', 'فرط حركة', 
@@ -56,7 +55,7 @@ async function fetchFullContent(url) {
 }
 
 async function masterScraper() {
-    console.log("🚀 Starting Smart Scraper...");
+    console.log("🚀 Starting Supabase Integrated Scraper...");
     let totalSaved = 0;
 
     for (const source of sources) {
@@ -69,12 +68,10 @@ async function masterScraper() {
             });
             const $ = cheerio.load(response.data);
             
-            // استراتيجية البحث الشاملة: نبحث عن أي رابط (a) يحتوي نص طويل وكلمة مفتاحية
             let foundItems = [];
             $('a').each((i, el) => {
                 const title = $(el).text().trim();
                 const link = $(el).attr('href');
-                
                 if (title.length > 25 && KEYWORDS.some(key => title.toLowerCase().includes(key.toLowerCase()))) {
                     if (link && !link.includes('/category/') && !link.includes('/tag/')) {
                         foundItems.push({ title, link });
@@ -82,54 +79,89 @@ async function masterScraper() {
                 }
             });
 
-            // إزالة التكرار من الروابط الموجودة في نفس الصفحة
             let uniqueItems = Array.from(new Map(foundItems.map(item => [item.link, item])).values());
-            console.log(`   📊 Found ${uniqueItems.length} relevant articles.`);
+            console.log(`   📊 Found ${uniqueItems.length} potential articles.`);
 
             for (const item of uniqueItems) {
                 if (totalSaved >= MAX_ARTICLES_PER_RUN) break;
 
                 const fullLink = item.link.startsWith('http') ? item.link : (new URL(source.url).origin + item.link);
-                const safeFileName = Buffer.from(fullLink).toString('base64').substring(0, 30) + ".json";
-                const filePath = path.join(ARTICLES_DIR, safeFileName);
-                
-                if (fs.existsSync(filePath)) continue; 
 
-                console.log(`   🎯 Catching: "${item.title.substring(0, 50)}..."`);
+                // 1. التحقق من وجود المقال مسبقاً في Supabase لتجنب التكرار
+                const { data: existing } = await supabase
+                    .from('articles')
+                    .select('id')
+                    .eq('source_url', fullLink)
+                    .maybeSingle();
 
+                if (existing) {
+                    console.log(`   ⏭️ Skipping (Already exists): ${item.title.substring(0, 30)}...`);
+                    continue;
+                }
+
+                console.log(`   🎯 Catching New: "${item.title.substring(0, 50)}..."`);
                 const content = await fetchFullContent(fullLink);
                 if (!content || content.length < 200) continue;
 
                 const articleSlug = item.title.toLowerCase().replace(/[^\w ]+/g, '').replace(/ +/g, '-').substring(0, 50) + "-" + Date.now();
-                const payload = {
+                
+                let articleData = {
                     source_name: source.name,
                     source_url: fullLink,
                     slug: articleSlug,
+                    image_url: `https://images.unsplash.com/photo-1617791160536-598cf3278667?q=80&w=1000&auto=format&fit=crop`,
                     created_at: new Date().toISOString()
                 };
 
+                // الترجمة
                 if (source.lang === 'ar') {
-                    payload.title_ar = item.title;
-                    payload.content_ar = content;
-                    payload.title_en = await smartTranslate(item.title, 'ar', 'en');
-                    payload.content_en = await smartTranslate(content, 'ar', 'en');
+                    articleData.title_ar = item.title;
+                    articleData.content_ar = content;
+                    articleData.title_en = await smartTranslate(item.title, 'ar', 'en');
+                    articleData.content_en = await smartTranslate(content, 'ar', 'en');
                 } else {
-                    payload.title_en = item.title;
-                    payload.content_en = content;
-                    payload.title_ar = await smartTranslate(item.title, 'en', 'ar');
-                    payload.content_ar = await smartTranslate(content, 'en', 'ar');
+                    articleData.title_en = item.title;
+                    articleData.content_en = content;
+                    articleData.title_ar = await smartTranslate(item.title, 'en', 'ar');
+                    articleData.content_ar = await smartTranslate(content, 'en', 'ar');
                 }
 
-                fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
-                console.log(`   ✅ Saved: ${safeFileName}`);
-                totalSaved++;
-                await sleep(2000);
+                // 2. حفظ في جدول articles
+                const { data: newArticle, error: articleError } = await supabase
+                    .from('articles')
+                    .insert([articleData])
+                    .select()
+                    .single();
+
+                if (articleError) {
+                    console.error("   ❌ Error saving article:", articleError.message);
+                    continue;
+                }
+
+                // 3. الربط في جدول content_items ليظهر في صفحة المدونة فوراً
+                const { error: linkError } = await supabase
+                    .from('content_items')
+                    .insert([{
+                        external_article_id: newArticle.id,
+                        content_type: 'external_article',
+                        slug: articleSlug,
+                        is_published: true,
+                        published_at: new Date().toISOString()
+                    }]);
+
+                if (linkError) {
+                    console.error("   ❌ Error linking to content_items:", linkError.message);
+                } else {
+                    console.log(`   ✅ Successfully saved & linked to Supabase!`);
+                    totalSaved++;
+                    await sleep(2000); // تأخير بسيط لتجنب ضغط الـ API
+                }
             }
         } catch (e) { 
             console.error(`❌ Error in ${source.name}: ${e.message}`); 
         }
     }
-    console.log(`\n🏁 Done. Total new: ${totalSaved}`);
+    console.log(`\n🏁 Done. Total new articles added: ${totalSaved}`);
 }
 
 masterScraper();

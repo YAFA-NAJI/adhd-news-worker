@@ -2,18 +2,14 @@ name: Daily ADHD Articles Update
 
 on:
   schedule:
-    # سيتم التشغيل كل 6 ساعات (الساعة 12 بالليل، 6 الصبح، 12 الظهر، 6 المساء بتوقيت UTC)
-    # تعادل (2:00، 8:00، 14:00، 20:00 بتوقيت القدس)
+    # التشغيل كل 6 ساعات (الساعة 12، 6، 12، 6 بتوقيت UTC)
     - cron: '0 0,6,12,18 * * *'
-  workflow_dispatch: # يتيح لكِ تشغيل السكربت يدوياً في أي وقت
+  workflow_dispatch: # للتشغيل اليدوي في أي وقت
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    # نمنح الأكشن صلاحية الكتابة لحفظ ملفات الـ JSON الجديدة
-    permissions:
-      contents: write
-      
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -29,16 +25,9 @@ jobs:
       - name: Run Scraper
         run: node index.js
         env:
-          # ملاحظة: السكربت الآن يستخدم الحفظ المحلي، لكن سنبقي المفاتيح للأمان أو للإيميل
+          # نربط الأسرار المخزنة في GitHub بالمتغيرات التي يطلبها السكربت
           NEXT_PUBLIC_SUPABASE_NEW_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_NEW_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }} 
-
-      - name: Commit and Push new articles
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add articles/*.json
-          # سيقوم بالدفع فقط إذا وجد ملفات جديدة، وإلا لن يفشل السكربت
-          git commit -m "Add new ADHD articles [automated]" || exit 0
-          git push
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          # أضيفي مفتاح Gemini إذا كنتِ تستخدمينه في الكود للترجمة
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
