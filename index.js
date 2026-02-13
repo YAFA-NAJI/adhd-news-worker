@@ -11,14 +11,11 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_KEY        
 );
 
-// زدنا العدد لـ 5 لتعويض أي مصدر يفشل
 const MAX_ARTICLES_PER_RUN = 5; 
-// أضفنا كلمات مفتاحية أعمق (Masking, Burnout, RSD)
 const KEYWORDS = ['adhd', 'تشتت', 'انتباه', 'فرط حركة', 'masking', 'burnout', 'rejection sensitive', 'RSD', 'النمو العصبي', 'neurodiversity', 'depression'];
 
 const sources = [
     { name: "ADDitude Magazine", url: "https://www.additudemag.com/feed/", lang: "en" },
-    // تم تحديث الرابط هنا لحل مشكلة الـ 404
     { name: "Medical News Today", url: "https://www.medicalnewstoday.com/rss/adhd", lang: "en" }, 
     { name: "Psychology Today", url: "https://www.psychologytoday.com/intl/front/feed", lang: "en" },
     { name: "Altibbi", url: "https://altibbi.com/مقالات-طبية/الصحة-النفسية", lang: "ar", isRSS: false },
@@ -37,7 +34,6 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function smartTranslate(text, fromLang, toLang) {
     if (!text || text.trim() === "") return null;
     try {
-        // إذا كان النص طويلاً نقسمه لفقرات لتجنب أخطاء الترجمة
         if (text.length > 2000) {
             const paragraphs = text.split('\n\n');
             let translatedParts = [];
