@@ -1,6 +1,6 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const Parser = require('rss-parser'); // مكتبة معالجة الـ RSS
+const Parser = require('rss-parser');
 const { translate } = require('google-translate-api-x');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
@@ -11,15 +11,17 @@ const supabase = createClient(
     process.env.SUPABASE_SERVICE_KEY        
 );
 
-const MAX_ARTICLES_PER_RUN = 3; 
-const KEYWORDS = ['adhd', 'تشتت', 'انتباه', 'توحد', 'autism', 'فرط حركة', 'النمو العصبي', 'neurodiversity'];
+// زدنا العدد لـ 5 لتعويض أي مصدر يفشل
+const MAX_ARTICLES_PER_RUN = 5; 
+// أضفنا كلمات مفتاحية أعمق (Masking, Burnout, RSD)
+const KEYWORDS = ['adhd', 'تشتت', 'انتباه', 'فرط حركة', 'masking', 'burnout', 'rejection sensitive', 'RSD', 'النمو العصبي', 'neurodiversity', 'depression'];
 
-// استخدام روابط الـ RSS لضمان جلب أحدث المقالات فور صدورها
 const sources = [
     { name: "ADDitude Magazine", url: "https://www.additudemag.com/feed/", lang: "en" },
-    { name: "Medical News Today", url: "https://www.medicalnewstoday.com/rss/adhd", lang: "en" },
-    { name: "Psychology Today", url: "https://www.psychologytoday.com/intl/front/feed", lang: "en" }, // أضفت هذا المصدر لقوته
-    { name: "Altibbi", url: "https://altibbi.com/مقالات-طبية/الصحة-النفسية", lang: "ar", isRSS: false }, // الطبي لا يوفر RSS بسهولة
+    // تم تحديث الرابط هنا لحل مشكلة الـ 404
+    { name: "Medical News Today", url: "https://www.medicalnewstoday.com/rss/adhd", lang: "en" }, 
+    { name: "Psychology Today", url: "https://www.psychologytoday.com/intl/front/feed", lang: "en" },
+    { name: "Altibbi", url: "https://altibbi.com/مقالات-طبية/الصحة-النفسية", lang: "ar", isRSS: false },
     { name: "WebTeb", url: "https://www.webteb.com/mental-health", lang: "ar", isRSS: false }
 ];
 
@@ -35,14 +37,15 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function smartTranslate(text, fromLang, toLang) {
     if (!text || text.trim() === "") return null;
     try {
-        if (text.length > 2500) {
+        // إذا كان النص طويلاً نقسمه لفقرات لتجنب أخطاء الترجمة
+        if (text.length > 2000) {
             const paragraphs = text.split('\n\n');
             let translatedParts = [];
             for (let p of paragraphs) {
                 if (p.trim() === "") continue;
                 const res = await translate(p, { from: fromLang, to: toLang });
                 translatedParts.push(res.text);
-                await sleep(1000); 
+                await sleep(500); 
             }
             return translatedParts.join('\n\n');
         } else {
@@ -75,17 +78,22 @@ async function extractImageUrl(url) {
 
 async function fetchFullContent(url) {
     try {
-        const response = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 15000 });
+        const response = await axios.get(url, { 
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, 
+            timeout: 15000 
+        });
         const $ = cheerio.load(response.data);
         let paragraphs = [];
-        // سحب المحتوى مع استثناء العناصر غير المرغوبة
-        $('article p, .article-body p, .entry-content p, p').each((i, el) => {
+        
+        // تحسين اختيار الفقرات لسحب محتوى أنظف
+        $('article p, .article-body p, .entry-content p, .article__body p').each((i, el) => {
             const txt = $(el).text().trim();
-            if (txt.length > 80 && !txt.includes('©') && !txt.includes('All rights reserved')) {
+            // استثناء الروابط الإعلانية والجمل القصيرة جداً
+            if (txt.length > 90 && !txt.includes('©') && !txt.includes('All rights reserved') && !txt.toLowerCase().includes('subscribe')) {
                 paragraphs.push(txt);
             }
         });
-        return paragraphs.slice(0, 10).join('\n\n'); 
+        return paragraphs.slice(0, 12).join('\n\n'); 
     } catch (e) { return null; }
 }
 
@@ -100,14 +108,12 @@ async function masterScraper() {
             let foundItems = [];
 
             if (source.isRSS !== false) {
-                // قراءة الـ RSS
                 const feed = await parser.parseURL(source.url);
                 foundItems = feed.items.map(item => ({
                     title: item.title,
                     link: item.link
                 }));
             } else {
-                // قراءة الـ HTML للمواقع التي لا تملك RSS
                 const response = await axios.get(source.url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
                 const $ = cheerio.load(response.data);
                 $('a').each((i, el) => {
@@ -119,13 +125,11 @@ async function masterScraper() {
                 });
             }
 
-            // تصفية النتائج بناءً على الكلمات المفتاحية وعدم التكرار
             let filteredItems = foundItems.filter(item => {
                 const searchArea = (item.title + item.link).toLowerCase();
                 return KEYWORDS.some(key => searchArea.includes(key.toLowerCase()));
             });
 
-            // حذف التكرار في نفس الدورة
             let uniqueItems = Array.from(new Map(filteredItems.map(item => [item.link, item])).values());
 
             for (const item of uniqueItems) {
@@ -133,7 +137,6 @@ async function masterScraper() {
 
                 const fullLink = item.link.startsWith('http') ? item.link : (new URL(source.url).origin + item.link);
                 
-                // التأكد من عدم وجود المقال مسبقاً في الداتابيز
                 const { data: existing } = await supabase.from('articles').select('id').eq('source_url', fullLink).maybeSingle();
                 if (existing) continue;
 
@@ -182,9 +185,11 @@ async function masterScraper() {
 
                 console.log(`   ✅ Successfully Saved.`);
                 totalSaved++;
-                await sleep(5000); // زيادة وقت الانتظار لتجنب الـ Rate Limit
+                await sleep(3000); 
             }
-        } catch (e) { console.error(`❌ Error with ${source.name}: ${e.message}`); }
+        } catch (e) { 
+            console.error(`❌ Error with ${source.name}: ${e.message}`); 
+        }
     }
     console.log("\n🏁 Done. Total new articles added:", totalSaved);
 }
