@@ -12,11 +12,11 @@ const supabase = createClient(
 );
 
 const MAX_ARTICLES_PER_RUN = 5; 
-const KEYWORDS = ['adhd', 'تشتت', 'انتباه', 'فرط حركة', 'masking', 'burnout', 'rejection sensitive', 'RSD', 'النمو العصبي', 'neurodiversity', 'depression'];
-
+const KEYWORDS = ['adhd', 'تشتت', 'انتباه', 'فرط حركة', 'masking', 'burnout', 'RSD', 'النمو العصبي', 'توحد', 'autism', 'صعوبات تعلم', 'قصور الانتباه'];
 const sources = [
     { name: "ADDitude Magazine", url: "https://www.additudemag.com/feed/", lang: "en" },
-    { name: "Medical News Today", url: "https://www.medicalnewstoday.com/rss/adhd", lang: "en" }, 
+    { name: "Medical News Today", url: "https://www.medicalnewstoday.com/categories/adhd", lang: "en", isRSS: false }, 
+    { name: "Psych Central", url: "https://psychcentral.com/rss/adhd.xml", lang: "en" },
     { name: "Psychology Today", url: "https://www.psychologytoday.com/intl/front/feed", lang: "en" },
     { name: "Altibbi", url: "https://altibbi.com/مقالات-طبية/الصحة-النفسية", lang: "ar", isRSS: false },
     { name: "WebTeb", url: "https://www.webteb.com/mental-health", lang: "ar", isRSS: false }
